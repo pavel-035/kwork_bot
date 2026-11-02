@@ -1,0 +1,6 @@
+node_modules/
+.env
+seen-projects.json
+kwork-response.html
+project-drafts.json
+ai-prompt.txt

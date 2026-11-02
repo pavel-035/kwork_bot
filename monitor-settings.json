@@ -1,0 +1,28 @@
+{
+  "categories": [],
+  "attributesByCategory": {
+    "37": [
+      "5017"
+    ],
+    "38": [
+      "1271",
+      "1272",
+      "1275",
+      "1276",
+      "1587"
+    ],
+    "79": [
+      "224",
+      "226"
+    ],
+    "255": [
+      "472033",
+      "472048"
+    ]
+  },
+  "intervalMinutes": 0.5,
+  "minBudget": 0,
+  "includeKeywords": [],
+  "excludeKeywords": [],
+  "webOnly": true
+}

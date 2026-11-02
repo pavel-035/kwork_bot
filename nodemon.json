@@ -1,0 +1,10 @@
+
+{
+  "watch": ["*.js"],
+  "ext": "js",
+  "ignore": [
+    "seen-projects.json",
+    "kwork-response.html",
+    "node_modules/**"
+  ]
+}
