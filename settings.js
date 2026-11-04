@@ -140,12 +140,13 @@ function registerSettings(bot, onBeginInput = () => {}) {
   }
 
   // Главное меню
+
   function mainView() {
     const s = getSettings();
 
     const count = new Set([
       ...s.categories,
-      ...Object.entries(s.attributesByCategory)
+      ...Object.entries(s.attributesByCategory || {})
         .filter(([, ids]) => ids.length)
         .map(([id]) => id)
     ]).size;
@@ -172,11 +173,14 @@ function registerSettings(bot, onBeginInput = () => {}) {
         [button('Минимальный бюджет', 'cfg:input:budget')],
         [button('Ключевые слова', 'cfg:input:include')],
         [button('Стоп-слова', 'cfg:input:exclude')],
-        [button(
-          'Только веб: ' + (s.webOnly ? 'да' : 'нет'),
-          'cfg:web'
-        )],
+        [
+          button(
+            `Только веб: ${s.webOnly ? 'да' : 'нет'}`,
+            'cfg:web'
+          )
+        ],
         [button('Промпт ИИ', 'cfg:prompt')],
+        [button('Назад', 'nav:settings')]
       ])
     };
   }
@@ -486,7 +490,17 @@ function registerSettings(bot, onBeginInput = () => {}) {
       onBeginInput(key);
 
       await ctx.answerCbQuery();
-      return ctx.reply(prompts[type], Markup.forceReply());
+      return ctx.reply(
+        prompts[type],
+        Markup.inlineKeyboard([
+          [
+            Markup.button.callback(
+              'Отменить',
+              'nav:cancel'
+            )
+          ]
+        ])
+      );
     }
   );
 

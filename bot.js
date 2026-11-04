@@ -1,6 +1,7 @@
 
 require('dotenv').config();
 
+const { registerNavigation } = require('./navigation');
 const { registerPromptMenu } = require('./prompt-menu');
 const { Telegraf, Markup } = require('telegraf');
 const { SocksProxyAgent } = require('socks-proxy-agent');
@@ -14,7 +15,9 @@ const {
   saveProject,
   getProject,
   getDraft,
-  saveDraft
+  saveDraft,
+  saveOffer,
+  getOffer
 } = require('./project-store');
 
 const {
@@ -36,25 +39,40 @@ const bot = new Telegraf(process.env.BOT_TOKEN, {
 });
 
 // Ожидаемые правки от пользователя
-const pendingEdits = new Map();
 
+const pendingEdits = new Map();
+const pendingOffers = new Map();
+
+let cancelSettingsInput = () => {};
 let cancelPromptInput = () => {};
 
-const { cancelSettingsInput } = registerSettings(
+// Регистрируем навигацию первой,
+// чтобы кнопка «Меню» работала даже во время ввода.
+registerNavigation(bot, (chatId) => {
+  pendingEdits.delete(chatId);
+  pendingOffers.delete(chatId);
+  cancelSettingsInput(chatId);
+  cancelPromptInput(chatId);
+});
+
+// Настройки мониторинга
+({ cancelSettingsInput } = registerSettings(
   bot,
   (chatId) => {
     pendingEdits.delete(chatId);
     cancelPromptInput(chatId);
   }
-);
+));
 
-cancelPromptInput = registerPromptMenu(
+// Редактирование промпта ИИ
+({ cancelPromptInput } = registerPromptMenu(
   bot,
   (chatId) => {
     pendingEdits.delete(chatId);
     cancelSettingsInput(chatId);
   }
-).cancelPromptInput;
+));
+
 
 // Защита от повторных запросов к GPT
 const busy = new Set();
@@ -78,14 +96,6 @@ function draftButtons(id) {
     ]
   ]);
 }
-
-// Основные команды
-bot.start((ctx) => {
-  return ctx.reply(
-    'Привет! Kwork Monitor запущен.\n' +
-    'Для проверки используй /demo.'
-  );
-});
 
 bot.command('ping', (ctx) => {
   return ctx.reply('✅ Бот работает!');
@@ -157,12 +167,10 @@ bot.command('demo', async (ctx) => {
 });
 
 // Кнопка "Текст ответа"
+
 bot.action(/^reply:([\w-]+)$/, async (ctx) => {
   if (!allowed(ctx)) {
-    return ctx.answerCbQuery(
-      'Нет доступа',
-      { show_alert: true }
-    );
+    return ctx.answerCbQuery('Нет доступа');
   }
 
   await ctx.answerCbQuery();
@@ -171,41 +179,47 @@ bot.action(/^reply:([\w-]+)$/, async (ctx) => {
   const project = getProject(id);
 
   if (!project) {
-    return ctx.reply(
-      'Проект не найден в истории. ' +
-      'Дождись нового уведомления или вызови /demo.'
-    );
+    return ctx.reply('Проект не найден.');
   }
 
   if (busy.has(id)) {
-    return ctx.reply('⏳ Запрос к GPT уже выполняется.');
+    return ctx.reply('Запрос к GPT уже выполняется.');
   }
 
-  busy.add(id);
+  const chatId = String(ctx.chat.id);
 
-  try {
-    await ctx.reply('⏳ Генерирую отклик...');
+  // Отменяем другие режимы ввода
+  pendingEdits.delete(chatId);
+  cancelSettingsInput(chatId);
+  cancelPromptInput(chatId);
 
-    const reply = await generateReply(project);
+  // Начинаем ввод условий
+  pendingOffers.set(chatId, {
+    id,
+    step: 'price'
+  });
 
-    // Сохраняем полученный текст
-    saveDraft(id, reply);
+  const previous = getOffer(id);
 
-    await ctx.reply(
-      `✍️ Отклик для проекта «${project.name}»:\n\n${reply}`,
-      draftButtons(id)
-    );
-  } catch (error) {
-    console.error('Ошибка генерации:', error);
+  const hint = previous
+    ? `\nРанее: ${previous.priceRub} ₽, ${previous.term}`
+    : '';
 
-    await ctx.reply(
-      '❌ GPT не смог сгенерировать отклик. ' +
-      'Попробуй ещё раз.'
-    );
-  } finally {
-    busy.delete(id);
-  }
+  return ctx.reply(
+    'Укажи стоимость выполнения проекта в рублях.\n' +
+    'Например: 5000' +
+    hint,
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          'Отменить',
+          'nav:cancel'
+        )
+      ]
+    ])
+  );
 });
+
 
 // Кнопка "Редактировать"
 bot.action(/^edit:([\w-]+)$/, async (ctx) => {
@@ -229,6 +243,7 @@ bot.action(/^edit:([\w-]+)$/, async (ctx) => {
 
   cancelSettingsInput(String(ctx.chat.id));
   cancelPromptInput(String(ctx.chat.id));
+  pendingOffers.delete(String(ctx.chat.id));
 
   // Запоминаем, какой текст нужно исправить
   pendingEdits.set(String(ctx.chat.id), {
@@ -237,23 +252,149 @@ bot.action(/^edit:([\w-]+)$/, async (ctx) => {
   });
 
   return ctx.reply(
-    '✏️ Напиши, что изменить в отклике.\n\n' +
-    'Например: «Сделай короче и убери вопрос в конце».\n\n' +
-    'Для отмены отправь /cancel.',
-    Markup.forceReply()
+    'Напиши, что изменить в отклике.\n' +
+    'Например: «Сделай короче и убери вопрос в конце».',
+    Markup.inlineKeyboard([
+      [
+        Markup.button.callback(
+          'Отменить',
+          'nav:cancel'
+        )
+      ]
+    ])
   );
 });
 
 // Отмена редактирования и ввода настроек
 bot.command('cancel', (ctx) => {
-  if (!allowed(ctx)) return ctx.reply('Нет доступа');
+  if (!allowed(ctx)) {
+    return ctx.reply('Нет доступа');
+  }
 
-  pendingEdits.delete(String(ctx.chat.id));
-  cancelSettingsInput(String(ctx.chat.id));
-  cancelPromptInput(String(ctx.chat.id));
+  const chatId = String(ctx.chat.id);
 
-  return ctx.reply('✅ Действие отменено.');
+  pendingEdits.delete(chatId);
+  pendingOffers.delete(chatId);
+  cancelSettingsInput(chatId);
+  cancelPromptInput(chatId);
+
+  return ctx.reply('Действие отменено.');
 });
+
+// Ввод стоимости и срока для GPT-отклика
+bot.use(async (ctx, next) => {
+  if (!allowed(ctx)) return next();
+
+  const message = ctx.message?.text;
+
+  if (!message || message.startsWith('/')) {
+    return next();
+  }
+
+  const chatId = String(ctx.chat.id);
+  const pending = pendingOffers.get(chatId);
+
+  if (!pending) return next();
+
+  const text = message.trim();
+
+  const cancelKeyboard = Markup.inlineKeyboard([
+    [
+      Markup.button.callback(
+        'Отменить',
+        'nav:cancel'
+      )
+    ]
+  ]);
+
+  // Шаг 1. Получаем стоимость
+  if (pending.step === 'price') {
+    const raw = text
+      .replace(/[\s\u00A0\u202F]/g, '')
+      .replace(/(?:руб(?:лей|ля|\.)?|₽)$/i, '');
+
+    if (!/^\d{1,9}$/.test(raw) || Number(raw) <= 0) {
+      return ctx.reply(
+        'Введи стоимость числом, например: 5000'
+      );
+    }
+
+    pending.priceRub = Number(raw);
+    pending.step = 'term';
+
+    return ctx.reply(
+      'Укажи срок выполнения проекта.\n' +
+      'Например: 3 рабочих дня, 24 часа, 1 неделя.',
+      cancelKeyboard
+    );
+  }
+
+  // Шаг 2. Получаем срок
+  if (pending.step === 'term') {
+    if (!text || text.length > 120) {
+      return ctx.reply(
+        'Укажи срок текстом, до 120 символов.'
+      );
+    }
+
+    const offer = {
+      priceRub: pending.priceRub,
+      term: text
+    };
+
+    const project = getProject(pending.id);
+
+    if (!project) {
+      pendingOffers.delete(chatId);
+      return ctx.reply('Проект не найден.');
+    }
+
+    if (busy.has(pending.id)) {
+      return ctx.reply('Запрос уже выполняется.');
+    }
+
+    pendingOffers.delete(chatId);
+    busy.add(pending.id);
+
+    try {
+      // Сохраняем условия проекта
+      saveOffer(pending.id, offer);
+
+      await ctx.reply(
+        'Генерирую отклик...\n\n' +
+        `Стоимость: ${offer.priceRub.toLocaleString('ru-RU')} ₽\n` +
+        `Срок: ${offer.term}`
+      );
+
+      // Генерация через GPT
+      const reply = await generateReply(
+        project,
+        offer
+      );
+
+      saveDraft(pending.id, reply);
+
+      return ctx.reply(
+        `Отклик для проекта «${project.name}»:\n\n${reply}`,
+        draftButtons(pending.id)
+      );
+
+    } catch (error) {
+      console.error('Ошибка GPT:', error);
+
+      return ctx.reply(
+        'Не удалось сгенерировать отклик. ' +
+        'Нажми «Текст ответа» ещё раз.'
+      );
+
+    } finally {
+      busy.delete(pending.id);
+    }
+  }
+
+  return next();
+});
+
 
 // Получаем текст правок
 bot.on('text', async (ctx) => {
@@ -284,7 +425,8 @@ bot.on('text', async (ctx) => {
     const revised = await reviseReply(
       project,
       pending.draft,
-      ctx.message.text
+      ctx.message.text,
+      getOffer(pending.id)
     );
 
     // Перезаписываем предыдущий черновик

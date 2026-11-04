@@ -18,7 +18,8 @@ function registerPromptMenu(bot, onBeginInput = () => {}) {
     return ctx.reply(
       'Текущий промпт ИИ:\n\n' + getAiPrompt(),
       Markup.inlineKeyboard([
-        [button('Изменить', 'prompt:edit')]
+        [button('Изменить', 'prompt:edit')],
+        [button('Назад', 'nav:settings')]
       ])
     );
   }
@@ -49,10 +50,16 @@ function registerPromptMenu(bot, onBeginInput = () => {}) {
     await ctx.answerCbQuery();
 
     return ctx.reply(
-      'Отправь новый промпт одним сообщением.\n\n' +
-      'Он полностью заменит текущий после сохранения.\n' +
-      'Для отмены используй /cancel.',
-      Markup.forceReply()
+      'Отправь новый промпт одним сообщением.\n' +
+      'Он заменит текущий после сохранения.',
+      Markup.inlineKeyboard([
+        [
+          Markup.button.callback(
+            'Отменить',
+            'nav:cancel'
+          )
+        ]
+      ])
     );
   });
 
@@ -72,10 +79,8 @@ function registerPromptMenu(bot, onBeginInput = () => {}) {
 
     const prompt = text.trim();
 
-    if (prompt.length < 20 || prompt.length > 3000) {
-      return ctx.reply(
-        'Промпт должен содержать от 20 до 3000 символов.'
-      );
+    if (!prompt.length) {
+      return ctx.reply('Промпт не может быть пустым');
     }
 
     // Пока только сохраняем черновик в памяти

@@ -134,7 +134,20 @@ async function fetchProjects(targets) {
         const id = String(project.id);
 
         if (!all.has(id)) {
-          all.set(id, { ...project, _sources: [] });
+          const username = [
+            project.username,
+            project.user_name,
+            project.user?.username,
+            project.buyer?.username
+          ].find(value =>
+            typeof value === 'string' && value.trim()
+          ) || '';
+
+          all.set(id, {
+            ...project,
+            username: username.trim(),
+            _sources: []
+          });
         }
 
         all.get(id)._sources.push(target.key);
@@ -226,6 +239,7 @@ function formatProject(project) {
     '🆕 Новый проект Kwork',
     '',
     `📌 ${project.name}`,
+    `👤 Заказчик: ${project.username || 'Не указан'}`,
     `📂 ${CATEGORIES[project.category_id] || 'Другое'}`,
     `💰 Бюджет: до ${budget.toLocaleString('ru-RU')} ₽`,
     `🕒 Создан: ${project.date_create}`,
@@ -403,49 +417,166 @@ async function checkProjects(bot) {
   }
 
   console.log(`Новых подходящих проектов: ${notified}`);
+  return notified;
 }
 
 
 // Запуск периодического мониторинга
 
+
+const CONTROL_FILE = path.join(
+  __dirname,
+  'monitor-control.json'
+);
+
+const control = fs.existsSync(CONTROL_FILE)
+  ? JSON.parse(
+    fs.readFileSync(CONTROL_FILE, 'utf8')
+  )
+  : { paused: false };
+
+const monitorRuntime = {
+  bot: null,
+  running: false,
+  lastStartedAt: 0,
+  lastSuccessAt: null,
+  lastError: null,
+  newDuringSession: 0,
+  paused: !!control.paused,
+  timer: null
+};
+
+// Получение состояния мониторинга
+function getMonitorStatus() {
+  return {
+    paused: monitorRuntime.paused,
+    running: monitorRuntime.running,
+    lastSuccessAt: monitorRuntime.lastSuccessAt,
+    lastError: monitorRuntime.lastError,
+    newDuringSession: monitorRuntime.newDuringSession
+  };
+}
+
+// Сохранение паузы
+function setPause(paused) {
+  monitorRuntime.paused = paused;
+
+  fs.writeFileSync(
+    CONTROL_FILE,
+    JSON.stringify({ paused }, null, 2),
+    'utf8'
+  );
+}
+
+function pauseMonitor() {
+  setPause(true);
+}
+
+function resumeMonitor() {
+  setPause(false);
+
+  // Разрешаем ближайшую плановую проверку
+  monitorRuntime.lastStartedAt = 0;
+}
+
+// Единая функция выполнения проверки
+async function runCheck(manual = false) {
+  if (!monitorRuntime.bot) {
+    return {
+      started: false,
+      message: 'Бот ещё не запущен'
+    };
+  }
+
+  if (monitorRuntime.running) {
+    return {
+      started: false,
+      message: 'Проверка уже выполняется'
+    };
+  }
+
+  if (monitorRuntime.paused && !manual) {
+    return {
+      started: false,
+      message: 'Мониторинг на паузе'
+    };
+  }
+
+  monitorRuntime.running = true;
+  monitorRuntime.lastStartedAt = Date.now();
+
+  try {
+    const found = await checkProjects(
+      monitorRuntime.bot
+    );
+
+    monitorRuntime.lastSuccessAt =
+      new Date().toISOString();
+
+    monitorRuntime.lastError = null;
+
+    monitorRuntime.newDuringSession +=
+      Number(found) || 0;
+
+    return {
+      started: true,
+      found: Number(found) || 0
+    };
+
+  } catch (error) {
+    monitorRuntime.lastError = error.message;
+
+    console.error(
+      'Ошибка мониторинга:',
+      error.message
+    );
+
+    return {
+      started: true,
+      error: error.message
+    };
+
+  } finally {
+    monitorRuntime.running = false;
+  }
+}
+
+// Ручная проверка — доступна и во время паузы
+function checkNow() {
+  return runCheck(true);
+}
+
+// Запуск планового мониторинга
 async function startMonitor(bot) {
   if (!process.env.CHAT_ID) {
     throw new Error('CHAT_ID не указан в .env');
   }
 
-  let running = false;
-  let lastCheckStartedAt = 0;
+  monitorRuntime.bot = bot;
 
-  async function check() {
-    if (running) return;
+  if (!monitorRuntime.timer) {
+    monitorRuntime.timer = setInterval(() => {
+      const intervalMs =
+        getSettings().intervalMinutes * 60 * 1000;
 
-    const now = Date.now();
-    const intervalMs = getSettings().intervalMinutes * 60 * 1000;
-
-    if (
-      lastCheckStartedAt > 0 &&
-      now - lastCheckStartedAt < intervalMs
-    ) {
-      return;
-    }
-
-    running = true;
-    lastCheckStartedAt = now;
-
-    try {
-      await checkProjects(bot);
-    } catch (error) {
-      console.error('Ошибка мониторинга:', error.message);
-    } finally {
-      running = false;
-    }
+      if (
+        !monitorRuntime.paused &&
+        !monitorRuntime.running &&
+        Date.now() - monitorRuntime.lastStartedAt >= intervalMs
+      ) {
+        void runCheck();
+      }
+    }, 10000);
   }
 
-  await check();
-
-  // Проверяем, пора ли запускать мониторинг
-  setInterval(check, 10000);
+  return runCheck();
 }
 
+module.exports = {
+  startMonitor,
+  getMonitorStatus,
+  pauseMonitor,
+  resumeMonitor,
+  checkNow
+};
 
-module.exports = { startMonitor };

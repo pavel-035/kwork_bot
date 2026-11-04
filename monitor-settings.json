@@ -20,9 +20,9 @@
       "472048"
     ]
   },
-  "intervalMinutes": 0.5,
+  "intervalMinutes": 1,
   "minBudget": 0,
   "includeKeywords": [],
   "excludeKeywords": [],
-  "webOnly": true
+  "webOnly": false
 }
