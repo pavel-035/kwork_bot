@@ -85,10 +85,8 @@ async function fetchProjects(targets) {
 
     try {
       const response = await axios.get(url.toString(), {
-        httpAgent: agent,
-        httpsAgent: agent,
         proxy: false,
-        timeout: 20000,
+        timeout: 15000,
         headers: {
           'User-Agent': 'Mozilla/5.0',
           'Accept': 'text/html'
@@ -153,9 +151,13 @@ async function fetchProjects(targets) {
         all.get(id)._sources.push(target.key);
       }
     } catch (error) {
-      console.error(
-        `Ошибка фильтра ${target.key}: ${error.message}`
-      );
+      console.error('Ошибка загрузки Kwork:', {
+        filter: target.key,
+        url: url.toString(),
+        code: error.code,
+        status: error.response?.status,
+        message: error.message
+      });
     }
 
     await sleep(1000);
